@@ -1,0 +1,26 @@
+# FastMCP for building MCP server
+fastmcp
+
+# Supabase client for database
+supabase
+
+# Vector and embeddings
+sentence-transformers
+huggingface-hub
+
+# Content fetching and parsing
+feedparser
+requests
+beautifulsoup4
+
+# Groq client
+groq
+
+# Utilities
+python-dotenv
+pydantic
+
+# RAGAS for RAG evaluation
+ragas
+langchain
+langchain-community

@@ -1,0 +1,483 @@
+I'll help you design a comprehensive architecture for your AI Learning Coach MCP server. Let me break this down into a high-level design with clear components and interactions.
+
+## High-Level System Architecture
+
+### 1. **System Overview**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Claude App (Client)                      │
+│                  - User Interface Layer                      │
+│                  - MCP Client Integration                    │
+└─────────────────┬───────────────────────────────────────────┘
+                  │ MCP Protocol (stdio/SSE)
+                  │
+┌─────────────────▼───────────────────────────────────────────┐
+│              FastMCP Server (MCP Host)                       │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │            Tool Registry & Handlers                     │ │
+│  │  - generate_daily_digest()                             │ │
+│  │  - add_content_source()                                │ │
+│  │  - update_progress()                                   │ │
+│  │  - search_insights()                                   │ │
+│  └────────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │         Core Business Logic Layer                      │ │
+│  │  - RAG Pipeline Manager                               │ │
+│  │  - Content Processor                                  │ │
+│  │  - Digest Generator                                   │ │
+│  │  - Progress Tracker                                   │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+        ┌─────────┴──────────┬──────────────────┐
+        │                    │                  │
+┌───────▼────────┐  ┌────────▼────────┐  ┌─────▼──────┐
+│   Embedding    │  │   Supabase DB   │  │  External  │
+│    Service     │  │   (PostgreSQL   │  │  Content   │
+│  (HuggingFace) │  │   + pgvector)   │  │  Sources   │
+└────────────────┘  └─────────────────┘  └────────────┘
+```
+
+### 2. **Database Schema Design (Supabase)**
+
+```sql
+-- User Profile & Learning State
+CREATE TABLE user_profile (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    current_week INTEGER NOT NULL,
+    current_topics TEXT[] NOT NULL,
+    learning_goals TEXT,
+    preferences JSONB, -- difficulty level, content types, frequency
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Content Sources
+CREATE TABLE content_sources (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    source_type VARCHAR(50) NOT NULL, -- 'blog', 'twitter', 'reddit'
+    source_url TEXT NOT NULL,
+    source_metadata JSONB, -- author, tags, category
+    is_active BOOLEAN DEFAULT TRUE,
+    added_at TIMESTAMP DEFAULT NOW(),
+    last_fetched TIMESTAMP
+);
+
+-- Raw Content Storage
+CREATE TABLE learning_content (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    source_id UUID REFERENCES content_sources(id),
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_type VARCHAR(50), -- 'article', 'tweet', 'post'
+    url TEXT,
+    metadata JSONB, -- tags, difficulty, topics
+    published_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Vector Embeddings for Semantic Search
+CREATE TABLE content_embeddings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    content_id UUID REFERENCES learning_content(id) ON DELETE CASCADE,
+    embedding VECTOR(768), -- Adjust dimension based on HF model
+    chunk_text TEXT NOT NULL, -- The actual text chunk
+    chunk_index INTEGER, -- Position in original content
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Create vector similarity search index
+CREATE INDEX ON content_embeddings USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- Daily Digests
+CREATE TABLE daily_digests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES user_profile(id),
+    digest_date DATE NOT NULL,
+    insights JSONB NOT NULL, -- Array of insight objects
+    week_number INTEGER,
+    topics_covered TEXT[],
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Individual Insights for Search
+CREATE TABLE learning_insights (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    digest_id UUID REFERENCES daily_digests(id),
+    content_id UUID REFERENCES learning_content(id),
+    insight_text TEXT NOT NULL,
+    insight_type VARCHAR(50), -- 'concept', 'example', 'practice', 'theory'
+    relevance_score FLOAT,
+    ragas_metrics JSONB, -- faithfulness, relevance, context precision
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Insight Embeddings for Search
+CREATE TABLE insight_embeddings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    insight_id UUID REFERENCES learning_insights(id) ON DELETE CASCADE,
+    embedding VECTOR(768),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX ON insight_embeddings USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- Progress Tracking
+CREATE TABLE learning_progress (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES user_profile(id),
+    week_number INTEGER NOT NULL,
+    topics_completed TEXT[],
+    insights_consumed INTEGER DEFAULT 0,
+    notes TEXT,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 3. **Core Component Architecture**
+
+#### **A. RAG Pipeline Manager**
+```python
+class RAGPipeline:
+    """
+    Orchestrates the RAG process for generating insights
+    """
+    - retrieve_relevant_content(query, top_k, filters)
+    - generate_insights(context, user_profile, num_insights)
+    - evaluate_with_ragas(insights, context)
+    - rank_and_filter_insights(insights, min_score)
+```
+
+#### **B. Embedding Service**
+```python
+class EmbeddingService:
+    """
+    Handles all embedding operations using HuggingFace models
+    Recommended: sentence-transformers/all-MiniLM-L6-v2 (384d)
+              or BAAI/bge-small-en-v1.5 (384d)
+              or sentence-transformers/all-mpnet-base-v2 (768d)
+    """
+    - embed_text(text: str) -> List[float]
+    - embed_batch(texts: List[str]) -> List[List[float]]
+    - similarity_search(query_embedding, top_k, filters)
+```
+
+#### **C. Content Processor**
+```python
+class ContentProcessor:
+    """
+    Processes and chunks content for embedding
+    """
+    - fetch_content(source_url, source_type)
+    - chunk_content(content, chunk_size=512, overlap=50)
+    - extract_metadata(content)
+    - store_with_embeddings(content, chunks, embeddings)
+```
+
+#### **D. Digest Generator**
+```python
+class DigestGenerator:
+    """
+    Generates personalized daily learning digests
+    """
+    - generate_daily_digest(user_profile, date)
+    - create_contextual_prompts(topics, week, difficulty)
+    - select_diverse_insights(retrieved_content)
+    - format_digest(insights)
+```
+
+### 4. **MCP Tool Implementations**
+
+#### **Tool 1: generate_daily_digest**
+```python
+@mcp.tool()
+async def generate_daily_digest(
+    date: Optional[str] = None,
+    num_insights: int = 5
+) -> Dict:
+    """
+    Generate personalized learning insights for the day
+    
+    Flow:
+    1. Fetch user profile (current week, topics, preferences)
+    2. Generate semantic queries based on current topics
+    3. Retrieve top-k relevant content chunks (k=20-30)
+    4. Use LLM to generate insights from retrieved context
+    5. Evaluate insights using RAGAS metrics
+    6. Filter and rank by relevance score
+    7. Store digest and return top N insights
+    """
+    pass
+```
+
+#### **Tool 2: add_content_source**
+```python
+@mcp.tool()
+async def add_content_source(
+    source_url: str,
+    source_type: str,
+    metadata: Optional[Dict] = None
+) -> Dict:
+    """
+    Add and process new learning content source
+    
+    Flow:
+    1. Validate source URL and type
+    2. Fetch content from source
+    3. Extract and store metadata
+    4. Chunk content intelligently
+    5. Generate embeddings for all chunks
+    6. Store in database with vector index
+    """
+    pass
+```
+
+#### **Tool 3: update_progress**
+```python
+@mcp.tool()
+async def update_progress(
+    week_number: Optional[int] = None,
+    topics: Optional[List[str]] = None,
+    completed_topics: Optional[List[str]] = None
+) -> Dict:
+    """
+    Update learning progress and profile
+    
+    Flow:
+    1. Update user_profile with new week/topics
+    2. Record progress in learning_progress table
+    3. Update preferences based on engagement patterns
+    4. Return updated profile summary
+    """
+    pass
+```
+
+#### **Tool 4: search_insights**
+```python
+@mcp.tool()
+async def search_insights(
+    query: str,
+    filters: Optional[Dict] = None,
+    limit: int = 10
+) -> List[Dict]:
+    """
+    Semantic search through past learning insights
+    
+    Flow:
+    1. Generate query embedding
+    2. Perform vector similarity search
+    3. Apply filters (date range, topics, week)
+    4. Rank by relevance and recency
+    5. Return formatted results with context
+    """
+    pass
+```
+
+### 5. **RAG Implementation Details**
+
+#### **Retrieval Strategy**
+```python
+class HybridRetriever:
+    """
+    Combines vector search with metadata filtering
+    """
+    def retrieve(self, query, user_context):
+        # 1. Generate query embedding
+        query_emb = embedding_service.embed_text(query)
+        
+        # 2. Vector similarity search with filters
+        candidates = db.query("""
+            SELECT c.*, ce.embedding <=> %s as distance
+            FROM content_embeddings ce
+            JOIN learning_content c ON ce.content_id = c.id
+            WHERE c.metadata->>'difficulty' <= %s
+            ORDER BY distance
+            LIMIT 30
+        """, (query_emb, user_context.difficulty))
+        
+        # 3. Rerank using cross-encoder (optional)
+        # 4. Apply diversity filter
+        # 5. Return top-k diverse results
+        
+        return selected_content
+```
+
+#### **Generation Strategy**
+```python
+class InsightGenerator:
+    """
+    Generates insights using retrieved context
+    """
+    def generate(self, context, user_profile):
+        prompt = f"""
+        You are a personalized learning coach for a student in Week {user_profile.week}.
+        Current topics: {user_profile.topics}
+        
+        Based on the following content, generate a concise learning insight:
+        
+        {context}
+        
+        Requirements:
+        - Actionable and specific to current learning stage
+        - 2-3 sentences maximum
+        - Include practical example if possible
+        - Difficulty appropriate for Week {user_profile.week}
+        """
+        
+        # Use Claude API or local LLM for generation
+        insight = llm.generate(prompt)
+        return insight
+```
+
+#### **RAGAS Evaluation**
+```python
+class RAGASEvaluator:
+    """
+    Evaluate generated insights using RAGAS metrics
+    """
+    def evaluate(self, insight, context, query):
+        metrics = {
+            'faithfulness': self._check_faithfulness(insight, context),
+            'answer_relevancy': self._check_relevancy(insight, query),
+            'context_precision': self._check_context_precision(context, query),
+            'context_recall': self._check_context_recall(insight, context)
+        }
+        
+        # Composite score
+        score = (metrics['faithfulness'] * 0.4 + 
+                 metrics['answer_relevancy'] * 0.4 +
+                 metrics['context_precision'] * 0.2)
+        
+        return score, metrics
+```
+
+### 6. **Project Structure**
+
+```
+learning-coach-mcp/
+├── src/
+│   ├── server.py                 # FastMCP server entry point
+│   ├── config.py                 # Configuration management
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── digest.py            # generate_daily_digest
+│   │   ├── content.py           # add_content_source
+│   │   ├── progress.py          # update_progress
+│   │   └── search.py            # search_insights
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── rag_pipeline.py      # RAG orchestration
+│   │   ├── embeddings.py        # HuggingFace embeddings
+│   │   ├── content_processor.py # Content chunking & processing
+│   │   ├── digest_generator.py  # Insight generation
+│   │   └── ragas_evaluator.py   # RAGAS metrics
+│   ├── database/
+│   │   ├── __init__.py
+│   │   ├── client.py            # Supabase client
+│   │   ├── models.py            # Pydantic models
+│   │   └── migrations/          # SQL migrations
+│   └── utils/
+│       ├── __init__.py
+│       ├── content_fetchers.py  # Fetch from blogs, Twitter, Reddit
+│       └── text_processing.py   # Text utilities
+├── tests/
+│   ├── test_tools.py
+│   ├── test_rag.py
+│   └── test_embeddings.py
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+
+### 7. **Key Design Decisions & Rationale**
+
+**A. Embedding Model Choice:**
+- Use `sentence-transformers/all-MiniLM-L6-v2` (384d) for fast inference
+- Or `BAAI/bge-small-en-v1.5` for better quality with similar speed
+- Balance between quality and performance
+
+**B. Chunking Strategy:**
+- Chunk size: 512 tokens with 50 token overlap
+- Preserves context while enabling granular retrieval
+- Store chunk metadata for reconstruction
+
+**C. Daily Digest Generation:**
+- Run asynchronously (can be scheduled via cron)
+- Generate 20-30 candidate insights, filter to top 5-7
+- Ensure diversity using MMR (Maximal Marginal Relevance)
+
+**D. RAGAS Integration:**
+- Evaluate each insight before including in digest
+- Minimum threshold: 0.7 composite score
+- Log metrics for continuous improvement
+
+**E. Scalability Considerations:**
+- pgvector with IVFFlat index for fast similarity search
+- Batch embedding operations
+- Cache embeddings to avoid recomputation
+- Implement rate limiting for external API calls
+
+### 8. **Data Flow: Generate Daily Digest**
+
+```
+1. User calls generate_daily_digest()
+   ↓
+2. Fetch user_profile (week, topics, preferences)
+   ↓
+3. For each topic, generate semantic query
+   ↓
+4. Retrieve top-30 content chunks via vector search
+   ↓
+5. Rerank by relevance + recency + diversity
+   ↓
+6. Generate 10 candidate insights using LLM
+   ↓
+7. Evaluate each with RAGAS (parallel)
+   ↓
+8. Filter insights with score > 0.7
+   ↓
+9. Select top 5-7 diverse insights (MMR)
+   ↓
+10. Store digest + insights in database
+    ↓
+11. Return formatted digest to Claude App
+```
+
+### 9. **Implementation Priorities**
+
+**Phase 1: Core Infrastructure (Week 1)**
+- Set up FastMCP server with basic tools
+- Implement Supabase schema and connection
+- Integrate HuggingFace embeddings service
+
+**Phase 2: Content Management (Week 2)**
+- Build content fetchers (blogs, Twitter, Reddit)
+- Implement chunking and embedding pipeline
+- Create add_content_source tool
+
+**Phase 3: RAG Pipeline (Week 3)**
+- Build retrieval system with vector search
+- Implement insight generation
+- Integrate RAGAS evaluation
+
+**Phase 4: Digest & Search (Week 4)**
+- Create generate_daily_digest tool
+- Implement search_insights with semantic search
+- Build progress tracking system
+
+**Phase 5: Optimization & Testing (Week 5)**
+- Add caching layer
+- Optimize query performance
+- Comprehensive testing and debugging
+
+---
+
+This architecture provides a solid foundation for your AI Learning Coach. The key strengths are:
+
+1. **Modularity**: Each component is independent and testable
+2. **Scalability**: pgvector and efficient embeddings support growth
+3. **Quality**: RAGAS ensures high-quality insights
+4. **Flexibility**: Easy to add new content sources or modify RAG strategy
