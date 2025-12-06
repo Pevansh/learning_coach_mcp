@@ -217,6 +217,12 @@ Add this to your Claude Desktop MCP configuration:
 
 **Note:** This is a single-user system. All data is stored under a default user profile.
 
+## Screenshots
+![alt text](<2025-12-06 03.57.13.png>)
+![alt text](<2025-12-06 03.58.01.png>)
+![alt text](<2025-12-06 03.58.02.png>)
+![alt text](<2025-12-06 03.58.04.png>)
+
 ## How It Works
 
 1. **Content Ingestion**: Fetches content from RSS feeds and blogs, generates embeddings using sentence-transformers
@@ -237,3 +243,4 @@ To extend this project:
 ## License
 
 MIT
+

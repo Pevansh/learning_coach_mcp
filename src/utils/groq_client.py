@@ -22,11 +22,41 @@ class GroqClient:
         self.client = Groq(api_key=api_key)
         self.default_model = "qwen/qwen3-32b"
 
+    def _extract_final_output(self, text: str) -> str:
+        """
+        Extract the final output from text that may contain <think> tags.
+
+        Args:
+            text: Raw text that may contain thinking process
+
+        Returns:
+            Cleaned final output without thinking tags
+        """
+        # If there are </think> tags, extract everything after the last one
+        if "</think>" in text:
+            parts = text.split("</think>")
+            # Get everything after the last </think> tag
+            final_output = parts[-1].strip()
+
+            # If there's actual content after </think>, use it
+            if final_output:
+                return final_output
+
+            # Otherwise, the model only generated thinking - return error message
+            return "Error: Model only generated thinking process, no insight produced."
+
+        # If no </think> tags but has <think>, it means incomplete response
+        if "<think>" in text:
+            return "Error: Incomplete response - thinking process not finished."
+
+        # No think tags at all, return as-is
+        return text.strip()
+
     async def generate_insight(
         self,
         content: str,
         user_context: Dict[str, Any],
-        max_tokens: int = 200
+        max_tokens: int = 500
     ) -> str:
         """
         Generate a personalized learning insight from content.
@@ -59,19 +89,22 @@ Generate a single, focused learning insight that:
 3. Is appropriate for their learning level
 4. Is concise (2-3 sentences)
 
+IMPORTANT: After your analysis, provide ONLY the final insight text without any thinking process, tags, or explanations.
+
 Insight:"""
 
         response = self.client.chat.completions.create(
             model=self.default_model,
             messages=[
-                {"role": "system", "content": "You are an expert AI Learning Coach who creates personalized, actionable learning insights."},
+                {"role": "system", "content": "You are an expert AI Learning Coach who creates personalized, actionable learning insights. Provide only the final insight without showing your thinking process."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=max_tokens,
             temperature=0.7
         )
 
-        return response.choices[0].message.content.strip()
+        raw_output = response.choices[0].message.content.strip()
+        return self._extract_final_output(raw_output)
 
     async def generate_daily_digest_summary(
         self,
