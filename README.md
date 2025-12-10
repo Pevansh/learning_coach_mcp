@@ -230,17 +230,3 @@ Add this to your Claude Desktop MCP configuration:
 3. **Retrieval**: Uses semantic search to find content relevant to your current topics
 4. **Generation**: Groq (Llama 3.3 70B) generates personalized insights based on your learning context
 5. **Scoring**: RAGAS-inspired metrics score each insight for relevance
-
-## Development
-
-To extend this project:
-
-- Add new content sources in `content_fetcher.py`
-- Modify RAG pipeline in `digest_generator.py`
-- Add new MCP tools in `server.py`
-- Customize relevance scoring in digest generator
-
-## License
-
-MIT
-
