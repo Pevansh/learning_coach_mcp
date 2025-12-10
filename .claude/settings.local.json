@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(.claude/hooks/play-tts.sh:*)"
-    ],
-    "deny": [],
-    "ask": []
-  }
-}
